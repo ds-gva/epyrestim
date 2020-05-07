@@ -32,7 +32,7 @@ class rt_estimation:
 
 
     ### Define total incidence per time window
-    def calc_incidence_per_time_step(self, incidence, win_start=2, win_end=8, silent=True):
+    def calc_time_windows(self, incidence, win_start=2, win_end=8, silent=True):
         # adjust the windows to work with python array index
         win_start -= 1
         win_end -= 1
@@ -45,17 +45,13 @@ class rt_estimation:
         
         nb_time_periods = len(t_start)
         if silent == False:
-            print("Calculated time periods: ", nb_time_periods)
-        
-        cumsum = []
-        for i in range(nb_time_periods):
-            j = np.sum(incidence[t_start[i]:t_end[i]])
-            cumsum.append(j)    
+            print("Calculated time periods: ", nb_time_periods)  
         
         # Checked for consistency in results with EpiEstim
-        return cumsum, t_start, t_end, nb_time_periods
+        return t_start, t_end, nb_time_periods
     
     ### Draw from discretized gamma distribution
+    # This is the same implementaton as in Epiestim
     #K is a positive integer or vector
     # mu is the mean
     # sigma is the deviation
@@ -65,48 +61,39 @@ class rt_estimation:
         if mu <= 1:
             print("Error: mu must be <=1")
         if  any(k) < 0:
-                print("Error: values in k must all be >0")
+            print("Error: values in k must all be >0")
     
         # Shift -1
-        a = ((mu - 1) / sigma)**2 #shape
-        b = sigma**2 / (mu - 1) # scale
+        a = ((mu - 1) / sigma)**2 # shape
+        b = sigma**2 / (mu - 1)   # scale
         
         res = k * gamma.cdf(k, a, scale=b) + (k -2) * gamma.cdf(k - 2, a, scale=b) - 2 * (k-1) * gamma.cdf(k-1,a,scale=b)
         res = res + a * b * (2 * gamma.cdf(k - 1, a + 1, scale=b) - gamma.cdf(k - 2, a + 1, scale=b) - gamma.cdf(k, a + 1, scale=b))
         
-        res2 = []
-        for i in range(len(res)):
-            m = max(0, res[i])
-            res2.append(m)
+        # Return largest of 0 or calculated value
+        res2 = [max(0,x) for x in res]
         
         # Checked for consistency in results with EpiEstim
         return np.array(res2)
-    
+
     ## Creates the posteriors from the selected SI distribution
     def posterior_from_si_distrib(self, incidence, si_distr, a_prior, b_prior, t_start, t_end):
         
         distrib_range = np.arange(0, len(si_distr))
         final_mean_si = np.sum(si_distr * distrib_range)
         lam = self.overall_infectivity(incidence, si_distr)
-        a_posterior = []
-        
-        for i in range(0, len(t_start)):
+
+        posteriors = np.empty((len(t_start),2))
+
+        for i, start in enumerate(t_start):
             if t_end[i] > final_mean_si:
-                post = a_prior + np.sum(incidence[t_start[i]: t_end[i]+1])
-                a_posterior.append(post)
+                a_post = a_prior + np.sum(incidence[start: t_end[i]+1])
+                b_post = 1 / (1 / b_prior + np.sum(lam[start:t_end[i]+1]))
+                posteriors[i] = a_post, b_post
             else:
-                a_posterior.append(np.nan)
-                
-        b_posterior = []
-        
-        for i in range(0, len(t_start)):
-            if t_end[i] > final_mean_si:
-                post = 1 / (1 / b_prior + np.sum(lam[t_start[i]:t_end[i]+1]))
-                b_posterior.append(post)
-            else:
-                b_posterior.append(np.nan)
-                
-        return a_posterior, b_posterior  
+                posteriors[i] = np.nan, np.nan
+
+        return posteriors #a_posterior, b_posterior  
         
     ## Description here: https://www.rdocumentation.org/packages/EpiEstim/versions/2.2-1/topics/overall_infectivity
     ## Defines overall infectivity by calculating lambda at time t
@@ -136,14 +123,14 @@ class rt_estimation:
         
         # Create our discretized serial interval distribution 
         si_distribution = self.discr_si(np.arange(0, T), mean_si, std_si)
-        
+
         # Fill our overflowing distribution with 0s (no prob)
         if len(si_distribution) < (T+1):
             over = -(len(si_distribution) - (T+1))
             si_distribution = np.pad(si_distribution, (0, over), 'constant')
     
         # Return cumulative incidence per time window, starting window and ending window
-        cum_inc, t_start, t_end, nb_time_periods = self.calc_incidence_per_time_step(incidence, win_start=win_start, win_end=win_end)   
+        t_start, t_end, nb_time_periods = self.calc_time_windows(incidence, win_start=win_start, win_end=win_end)   
         
         # Calculate the parameters of our gamma prior based on the provided mean and std of the serial interval
         a_prior = (mean_prior/ std_prior)**2
@@ -151,9 +138,8 @@ class rt_estimation:
         
         # Calculate our posteriors from our serial interval distribution
         post = self.posterior_from_si_distrib(incidence, si_distribution, a_prior, b_prior, t_start, t_end)
-        a_posterior = np.array(post[0])
-        b_posterior = np.array(post[1])
-        
+        a_posterior, b_posterior = post[:, 0], post[:, 1]
+
         mean_posterior = a_posterior * b_posterior
         std_posterior = np.sqrt(a_posterior) * b_posterior
         
@@ -257,13 +243,11 @@ class rt_estimation:
         
         results = []
         # Loop through all the pairs 
-        for i in si_pairs:
+        for pair in si_pairs:
 
-            ## ALL THIS CODE NEEDS TO MOVE TO A FUNCTION
-            
+            ## !!! ALL THIS CODE NEEDS TO MOVE TO A FUNCTION
             # Generate the serial interval distribution for the pair
-            mean_si = i[0]
-            std_si = i[1]
+            mean_si, std_si = pair
             si_distribution = self.discr_si(np.arange(0, T), mean_si, std_si)
 
             # Fill our overflowing distribution with 0s (no prob)
@@ -272,7 +256,7 @@ class rt_estimation:
                 si_distribution = np.pad(si_distribution, (0, over), 'constant')
 
             # Return cumulative incidence per time window, starting window and ending window
-            cum_inc, t_start, t_end, nb_time_periods = self.calc_incidence_per_time_step(
+            t_start, t_end, nb_time_periods = self.calc_time_windows(
                 incidence, win_start=win_start, win_end=win_end)
 
             # Calculate the parameters of our gamma prior based on the provided mean and std of the serial interval
@@ -280,10 +264,8 @@ class rt_estimation:
             b_prior = std_prior**2 / mean_prior
 
             # Calculate our posteriors from our serial interval distribution
-            post = self.posterior_from_si_distrib(
-                incidence, si_distribution, a_prior, b_prior, t_start, t_end)
-            a_posterior = np.array(post[0])
-            b_posterior = np.array(post[1])
+            post = self.posterior_from_si_distrib(incidence, si_distribution, a_prior, b_prior, t_start, t_end)
+            a_posterior, b_posterior = post[:,0], post[:,1]
 
             # For each time step we sample the posterior distribution
             all_sampled = []
