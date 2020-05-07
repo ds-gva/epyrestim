@@ -5,85 +5,139 @@ import scipy.stats as stats
 from scipy.stats import gamma
 import warnings
 
-class rt_estimation:
-    # This is our estimated R_t object, returned from our estimate_R function (without sampling)
-    class R_t_base:
-        def __init__(self, a_posterior, b_posterior, mean_posterior, std_posterior, mean_si, std_si, t_start, t_end, real_dates):
+class estimators:
+    # This is our estimated Rt object when using the parametric function
+    class Rt_parametric:
+        def __init__(self, a_posterior, b_posterior, mean_posterior, std_posterior, t_start, t_end, real_dates):
             self.a_posterior = a_posterior
             self.b_posterior = b_posterior
             self.mean_posterior = mean_posterior
             self.median_posterior = stats.gamma.ppf(0.5, a_posterior, scale=b_posterior)
             self.std_posterior = std_posterior
-            self.mean_si = std_si
             self.t_start = t_start
             self.t_end = t_end
             self.real_dates = real_dates[len(real_dates)-len(mean_posterior):]
-        
-        def confidence_intervals(self, ci=0.05):        
-            bottom = stats.gamma.ppf(ci, self.a_posterior, scale=self.b_posterior)
-            top = stats.gamma.ppf(1-ci, self.a_posterior, scale=self.b_posterior)
-            return bottom, top, ci
-        
-        def to_dataframe(self, ci=0.05):
-            x = range(0,len(self.mean_posterior))
-            low_ci, high_ci, ci_level = self.confidence_intervals(ci)
-            df = pd.DataFrame(data={'days_index': x, 'real_dates': self.real_dates, 'Rt_mean': self.mean_posterior, 'low_ci': low_ci,'Rt_median': self.median_posterior, 'high_ci': high_ci, 't_start': self.t_start, 't_end': self.t_end})  
-            return df
+            self.dataframe = self.to_dataframe()
 
+        def confidence_intervals(self):
+            low_ci_05 = stats.gamma.ppf(0.05, self.a_posterior, scale=self.b_posterior)
+            high_ci_95 = stats.gamma.ppf(0.95, self.a_posterior,scale=self.b_posterior)
+            low_ci_025 = stats.gamma.ppf(0.025, self.a_posterior, scale=self.b_posterior)
+            high_ci_975 = stats.gamma.ppf(0.975, self.a_posterior, scale=self.b_posterior)
+            return low_ci_05, high_ci_95, low_ci_025, high_ci_975
 
-    ### Define total incidence per time window
-    def calc_time_windows(self, incidence, win_start=2, win_end=8, silent=True):
+        def to_dataframe(self):
+            ci = self.confidence_intervals()
+            rt_parametric_df = pd.DataFrame(data={'dates': self.real_dates,
+                                    'Rt_mean': self.mean_posterior,
+                                    'Rt_median': self.median_posterior,
+                                    'low_ci_05': ci[0],
+                                    'high_ci_95': ci[1],
+                                    'low_ci_025': ci[2],
+                                    'high_ci_975': ci[3]})
+            return rt_parametric_df
+    
+    # This is the object for the Rt from SI sampling
+    class Rt_sampled:
+        def __init__(self, all_sampled, t_start, t_end, real_dates):
+            self.all_sampled = all_sampled
+            self.t_start = t_start
+            self.t_end = t_end
+            self.dataframe = self.to_dataframe(all_sampled, real_dates)
+
+        def to_dataframe(self, samples, real_dates):
+            """
+            Converts the generated Rt samples from our estimation into a pandas dataframe that can be used for plotting or other.
+            The dataframe also includes key summary statistics such as mean, median, standard deviation and confidence intervals
+
+            Parameters
+            ----------
+            samples (ndarray): the samples generated from our estimated Rt
+            real_dates: the series of dates from the original incidence data
+
+            Returns:
+            ----------
+            Pandas dataframe with all Rt statistics and dates
+            """
+            results_df = pd.DataFrame(samples)
+            
+            # Calculate key statistics
+            results_df['Rt_mean'] = results_df.mean(axis=1)
+            results_df['Rt_median'] = results_df.median(axis=1)
+            results_df['Rt_Std'] = results_df.std(axis=1)
+            results_df['low_ci_05'] = results_df.quantile(q=0.05, axis=1)
+            results_df['high_ci_95'] = results_df.quantile(q=0.95, axis=1)
+            results_df['low_ci_025'] = results_df.quantile(q=0.025, axis=1)
+            results_df['high_ci_975'] = results_df.quantile(q=0.975, axis=1)
+
+            # Add the dates
+            dates = real_dates[len(real_dates)-len(results_df['Rt_mean']):]
+            results_df['dates'] = dates
+            #results_df = results_df[results_df.index > (len(real_dates) - len(dates))]
+
+            rt_sampled_df = pd.DataFrame({'dates': dates,
+                                        'Rt_mean': results_df['Rt_mean'],
+                                        'Rt_median': results_df['Rt_median'],
+                                        'Rt_Std': results_df['Rt_Std'],
+                                        'low_ci_05': results_df['low_ci_05'],
+                                        'high_ci_95': results_df['high_ci_95'],
+                                        'low_ci_025': results_df['low_ci_025'],
+                                        'high_ci_975': results_df['high_ci_975'],
+                                        })
+            return rt_sampled_df
+
+    ### This function returns the starting and ending time periods according to the passed windows
+    # also returns the total number of time periods
+    def calc_time_windows(self, incidence, win_start=2, win_end=8):
         # adjust the windows to work with python array index
         win_start -= 1
         win_end -= 1
-        
-        ## Define time steps as a moving window of 1 week
+
         total_time = len(incidence)
-        
+
         t_start = np.arange(win_start, total_time-(win_end-win_start))
         t_end = np.arange(win_end, total_time)
-        
+
         nb_time_periods = len(t_start)
-        if silent == False:
-            print("Calculated time periods: ", nb_time_periods)  
-        
-        # Checked for consistency in results with EpiEstim
+
         return t_start, t_end, nb_time_periods
-    
+
     ### Draw from discretized gamma distribution
     # This is the same implementaton as in Epiestim
     #K is a positive integer or vector
     # mu is the mean
     # sigma is the deviation
-    def discr_si(self, k, mu, sigma):    
+    def discr_si(self, k, mu, sigma):
         if sigma < 0:
             print("Error: sigma must be >0")
         if mu <= 1:
             print("Error: mu must be <=1")
-        if  any(k) < 0:
+        if any(k) < 0:
             print("Error: values in k must all be >0")
-    
+
         # Shift -1
-        a = ((mu - 1) / sigma)**2 # shape
+        a = ((mu - 1) / sigma)**2  # shape
         b = sigma**2 / (mu - 1)   # scale
-        
-        res = k * gamma.cdf(k, a, scale=b) + (k -2) * gamma.cdf(k - 2, a, scale=b) - 2 * (k-1) * gamma.cdf(k-1,a,scale=b)
-        res = res + a * b * (2 * gamma.cdf(k - 1, a + 1, scale=b) - gamma.cdf(k - 2, a + 1, scale=b) - gamma.cdf(k, a + 1, scale=b))
-        
+
+        res = k * gamma.cdf(k, a, scale=b) + (k - 2) * gamma.cdf(k - 2,
+                                                                 a, scale=b) - 2 * (k-1) * gamma.cdf(k-1, a, scale=b)
+        res = res + a * b * (2 * gamma.cdf(k - 1, a + 1, scale=b) -
+                             gamma.cdf(k - 2, a + 1, scale=b) - gamma.cdf(k, a + 1, scale=b))
+
         # Return largest of 0 or calculated value
-        res2 = [max(0,x) for x in res]
-        
+        res2 = [max(0, x) for x in res]
+
         # Checked for consistency in results with EpiEstim
         return np.array(res2)
 
     ## Creates the posteriors from the selected SI distribution
     def posterior_from_si_distrib(self, incidence, si_distr, a_prior, b_prior, t_start, t_end):
-        
+
         distrib_range = np.arange(0, len(si_distr))
         final_mean_si = np.sum(si_distr * distrib_range)
         lam = self.overall_infectivity(incidence, si_distr)
 
-        posteriors = np.empty((len(t_start),2))
+        posteriors = np.empty((len(t_start), 2))
 
         for i, start in enumerate(t_start):
             if t_end[i] > final_mean_si:
@@ -93,57 +147,122 @@ class rt_estimation:
             else:
                 posteriors[i] = np.nan, np.nan
 
-        return posteriors #a_posterior, b_posterior  
-        
+        return posteriors  # a_posterior, b_posterior
+
     ## Description here: https://www.rdocumentation.org/packages/EpiEstim/versions/2.2-1/topics/overall_infectivity
     ## Defines overall infectivity by calculating lambda at time t
     def overall_infectivity(self, incidence, si_distr):
         T = len(incidence)
         lam_t_vector = [np.nan]
+
         # For each day, we calculate LambdaT the infectivity. To do that we calculate all the infections to that day which we multiply be the probability of
         # infection (the serial distribution flipped)
-        for i in range(1,T):
+        for i in range(1, T):
             infections = incidence[0:i+1]
             probabilities = np.flip(si_distr[0:i+1])
             lam_t = np.sum(infections * probabilities)
             lam_t_vector.append(lam_t)
-        return lam_t_vector  
-    
+        return lam_t_vector
+
     ## This is the main function that does all the work
         # Incidenc: our incidence series
         # mean_si: the mean of our serial interval distribution
         # std_si: standard deviation of our serial interval distribution
         # win_start, win_end: starting and ending period for the rolling window (NOTE: in actual time periods not Python index, i.e., 1 = 0)
         # mean_prior, std_prior: the mean and std of our Rt prior
-    def estimate_Rt(self, incidence, mean_si, std_si, win_start=2, win_end=8, mean_prior=4, std_prior=4 ): 
+    def Rt_parametric_si(self, incidence, mean_si, std_si, win_start=2, win_end=8, mean_prior=4, std_prior=4):
         # Find how many time periods we have
         T = len(incidence)
-        
+
         real_dates = incidence.index
-        
-        # Create our discretized serial interval distribution 
+
+        # Create our discretized serial interval distribution
         si_distribution = self.discr_si(np.arange(0, T), mean_si, std_si)
 
         # Fill our overflowing distribution with 0s (no prob)
         if len(si_distribution) < (T+1):
             over = -(len(si_distribution) - (T+1))
             si_distribution = np.pad(si_distribution, (0, over), 'constant')
-    
+
         # Return cumulative incidence per time window, starting window and ending window
-        t_start, t_end, nb_time_periods = self.calc_time_windows(incidence, win_start=win_start, win_end=win_end)   
-        
+        t_start, t_end, nb_time_periods = self.calc_time_windows(
+            incidence, win_start=win_start, win_end=win_end)
+
         # Calculate the parameters of our gamma prior based on the provided mean and std of the serial interval
-        a_prior = (mean_prior/ std_prior)**2
+        a_prior = (mean_prior / std_prior)**2
         b_prior = std_prior**2 / mean_prior
-        
+
         # Calculate our posteriors from our serial interval distribution
-        post = self.posterior_from_si_distrib(incidence, si_distribution, a_prior, b_prior, t_start, t_end)
+        post = self.posterior_from_si_distrib(
+            incidence, si_distribution, a_prior, b_prior, t_start, t_end)
         a_posterior, b_posterior = post[:, 0], post[:, 1]
 
         mean_posterior = a_posterior * b_posterior
         std_posterior = np.sqrt(a_posterior) * b_posterior
-        
-        result = self.R_t_base(a_posterior,b_posterior, mean_posterior,std_posterior,mean_si, std_si, t_start, t_end, real_dates)
+
+        result = self.Rt_parametric(a_posterior, b_posterior, mean_posterior,
+                               std_posterior, t_start, t_end, real_dates)
+        return result
+
+    # Estimate Rt while adding uncertainty around the SI
+    def Rt_from_si_sampling(self, incidence, sample_mean_truncnorm, sample_std_truncnorm, n_si_sims=1, n_posterior_samples=1, win_start=2, win_end=8, mean_prior=4, std_prior=4):
+
+        ## First part is same as for standard Rt estimation (need to create a separate function to encapsulate that)
+
+        # Find how many time periods we have
+        T = len(incidence)
+
+        real_dates = incidence.index
+
+        # Generate our pairs of mean and std for the SI by sampling n_si_sims pairs
+        si_pairs = self.sample_si_distributions(
+            sample_mean_truncnorm, sample_std_truncnorm, n_si_sims)
+
+        results = []
+        # Loop through all the pairs
+        for pair in si_pairs:
+
+            ## !!! ALL THIS CODE NEEDS TO MOVE TO A FUNCTION
+            # Generate the serial interval distribution for the pair
+            mean_si, std_si = pair
+            si_distribution = self.discr_si(np.arange(0, T), mean_si, std_si)
+
+            # Fill our overflowing distribution with 0s (no prob)
+            if len(si_distribution) < (T+1):
+                over = -(len(si_distribution) - (T+1))
+                si_distribution = np.pad(
+                    si_distribution, (0, over), 'constant')
+
+            # Return cumulative incidence per time window, starting window and ending window
+            t_start, t_end, nb_time_periods = self.calc_time_windows(
+                incidence, win_start=win_start, win_end=win_end)
+
+            # Calculate the parameters of our gamma prior based on the provided mean and std of the serial interval
+            a_prior = (mean_prior / std_prior)**2
+            b_prior = std_prior**2 / mean_prior
+
+            # Calculate our posteriors from our serial interval distribution
+            post = self.posterior_from_si_distrib(
+                incidence, si_distribution, a_prior, b_prior, t_start, t_end)
+            a_posterior, b_posterior = post[:, 0], post[:, 1]
+
+            # For each time step we sample the posterior distribution
+            all_sampled = []
+            for t in range(nb_time_periods):
+                if np.isnan(a_posterior[t]):
+                    sample = [np.nan]*n_posterior_samples
+                else:
+                    sample = np.random.default_rng().gamma(
+                        shape=a_posterior[t], scale=b_posterior[t], size=n_posterior_samples)
+                all_sampled.append(sample)
+
+            results.append(all_sampled)
+        # Bring all our samples together
+        all_samples = np.concatenate(results, axis=1)
+        # Move to a dataframe for easier manipulation
+        result = self.Rt_sampled(all_samples, t_start, t_end, real_dates)
+
+        # Return the dataframe
         return result
 
     ## Here the mean and standard deviation of the serial interval distribution varies according to a truncated normal distribution
@@ -227,67 +346,3 @@ class rt_estimation:
         
         # Return our array of sampled pairs
         return sampled_si_distributions
-
-    # Estimate Rt while adding uncertainty around the SI
-    def Rt_from_si_sampling(self, incidence, sample_mean_truncnorm, sample_std_truncnorm, n_si_sims=1, n_posterior_samples=1, win_start=2, win_end=8, mean_prior=4, std_prior=4):
-
-        ## First part is same as for standard Rt estimation (need to create a separate function to encapsulate that)
-
-        # Find how many time periods we have
-        T = len(incidence)
-
-        real_dates = incidence.index
-
-        # Generate our pairs of mean and std for the SI by sampling n_si_sims pairs
-        si_pairs = self.sample_si_distributions(sample_mean_truncnorm, sample_std_truncnorm, n_si_sims)
-        
-        results = []
-        # Loop through all the pairs 
-        for pair in si_pairs:
-
-            ## !!! ALL THIS CODE NEEDS TO MOVE TO A FUNCTION
-            # Generate the serial interval distribution for the pair
-            mean_si, std_si = pair
-            si_distribution = self.discr_si(np.arange(0, T), mean_si, std_si)
-
-            # Fill our overflowing distribution with 0s (no prob)
-            if len(si_distribution) < (T+1):
-                over = -(len(si_distribution) - (T+1))
-                si_distribution = np.pad(si_distribution, (0, over), 'constant')
-
-            # Return cumulative incidence per time window, starting window and ending window
-            t_start, t_end, nb_time_periods = self.calc_time_windows(
-                incidence, win_start=win_start, win_end=win_end)
-
-            # Calculate the parameters of our gamma prior based on the provided mean and std of the serial interval
-            a_prior = (mean_prior / std_prior)**2
-            b_prior = std_prior**2 / mean_prior
-
-            # Calculate our posteriors from our serial interval distribution
-            post = self.posterior_from_si_distrib(incidence, si_distribution, a_prior, b_prior, t_start, t_end)
-            a_posterior, b_posterior = post[:,0], post[:,1]
-
-            # For each time step we sample the posterior distribution
-            all_sampled = []
-            for t in range(nb_time_periods):
-                if np.isnan(a_posterior[t]):
-                    sample = [np.nan]*n_posterior_samples
-                else:
-                    sample = np.random.default_rng().gamma(
-                        shape=a_posterior[t], scale=b_posterior[t], size=n_posterior_samples)
-                all_sampled.append(sample)
-
-            results.append(all_sampled)
-
-        results = np.concatenate(results, axis=1)
-        results_df = pd.DataFrame(results)
-        results_df['mean'] = results_df.mean(axis=1)
-        results_df['sd'] = results_df.std(axis=1)
-        results_df['botq_005'] = results_df.quantile(q=0.16, axis=1)
-        results_df['topq_095'] = results_df.quantile(q=0.84, axis=1)
-
-        real_dates = real_dates[len(real_dates)-len(results_df['mean']):]
-        final = pd.DataFrame({'real_dates': real_dates, 'Rt_mean': results_df['mean'],  'Std': results_df['sd'], 'low_ci': results_df['botq_005'], 'high_ci': results_df['topq_095']})
-        
-        # Return the dataframe
-        return final
