@@ -8,7 +8,7 @@ import scipy.stats as stats
 from scipy.stats import gamma
 
 class rt_plot:
-    def plot_base(self, to_plot, figsize=(7, 5), title=None, marker_size=1.0):
+    def plot_base(self, to_plot, figsize=(7, 5), title=None, marker_size=7.0):
 
         over_1 = to_plot[to_plot['Rt_mean'] >= 1]
         under_1 = to_plot[to_plot['Rt_mean'] < 1]

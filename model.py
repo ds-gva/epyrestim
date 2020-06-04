@@ -88,11 +88,8 @@ class estimators:
 
     ### This function returns the starting and ending time periods according to the passed windows
     # also returns the total number of time periods
-    def calc_time_windows(self, incidence, win_start=2, win_end=8):
-        # adjust the windows to work with python array index
-        win_start -= 1
-        win_end -= 1
-
+    # Important for those coming from R: Python starts indexing at 0, so window starts at 1, not 2
+    def calc_time_windows(self, incidence, win_start=1, win_end=7):
         total_time = len(incidence)
 
         t_start = np.arange(win_start, total_time-(win_end-win_start))
@@ -108,12 +105,9 @@ class estimators:
     # mu is the mean
     # sigma is the deviation
     def discr_si(self, k, mu, sigma):
-        if sigma < 0:
-            print("Error: sigma must be >0")
-        if mu <= 1:
-            print("Error: mu must be <=1")
-        if any(k) < 0:
-            print("Error: values in k must all be >0")
+        assert sigma > 0, "Error: sigma must be >0"
+        assert mu > 1, "Error: mu must be <=1"
+        assert all(k) >= 0, "Error: values in k must all be >0"
 
         # Shift -1
         a = ((mu - 1) / sigma)**2  # shape
@@ -127,7 +121,6 @@ class estimators:
         # Return largest of 0 or calculated value
         res2 = [max(0, x) for x in res]
 
-        # Checked for consistency in results with EpiEstim
         return np.array(res2)
 
     ## Creates the posteriors from the selected SI distribution
@@ -153,24 +146,26 @@ class estimators:
     ## Defines overall infectivity by calculating lambda at time t
     def overall_infectivity(self, incidence, si_distr):
         T = len(incidence)
-        lam_t_vector = [np.nan]
+        lam_t_vector = np.empty(len(incidence))
+        lam_t_vector[0] = np.nan
 
         # For each day, we calculate LambdaT the infectivity. To do that we calculate all the infections to that day which we multiply be the probability of
         # infection (the serial distribution flipped)
-        for i in range(1, T):
+        # Note: can probably reduce this code and improve perf. 
+        for i in range(1, len(incidence)):
             infections = incidence[0:i+1]
             probabilities = np.flip(si_distr[0:i+1])
             lam_t = np.sum(infections * probabilities)
-            lam_t_vector.append(lam_t)
+            lam_t_vector[i] = lam_t
         return lam_t_vector
 
     ## This is the main function that does all the work
-        # Incidenc: our incidence series
+        # incidence: our incidence series
         # mean_si: the mean of our serial interval distribution
         # std_si: standard deviation of our serial interval distribution
-        # win_start, win_end: starting and ending period for the rolling window (NOTE: in actual time periods not Python index, i.e., 1 = 0)
+        # win_start, win_end: starting and ending period for the rolling window (NOTE: in python index, unlike in R)
         # mean_prior, std_prior: the mean and std of our Rt prior
-    def Rt_parametric_si(self, incidence, mean_si, std_si, win_start=2, win_end=8, mean_prior=4, std_prior=4):
+    def Rt_parametric_si(self, incidence, mean_si, std_si, win_start=1, win_end=7, mean_prior=4, std_prior=4):
         # Find how many time periods we have
         T = len(incidence)
 
@@ -184,7 +179,7 @@ class estimators:
             over = -(len(si_distribution) - (T+1))
             si_distribution = np.pad(si_distribution, (0, over), 'constant')
 
-        # Return cumulative incidence per time window, starting window and ending window
+        # Return out time windows and number of time periods based on the starting and ending time periods
         t_start, t_end, nb_time_periods = self.calc_time_windows(
             incidence, win_start=win_start, win_end=win_end)
 
