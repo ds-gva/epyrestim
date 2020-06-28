@@ -5,9 +5,9 @@
 
 All credit for the original models and code go to the EpiEstim team (Cori et al., AJE 2013).
 
-Currently the package provides two implementations:
-* *Rt_parametric_si* :   uses the method proposed in Cori et al. (AJE, 2013) for estimating Rt over vairous time windows, using the incidence curve and assumptions on a Gamma-distributed serial interval distribution.
-* *Rt_from_si_sampling* : uses the same method as in Cori et al. (AJE, 2013) allowing to add some uncertainty around the serial interval distribution
+Currently the package provides two implementations of the "Cori" method of calculating Rt:
+* *Parametric SI* :  uses the method proposed in Cori et al. (AJE, 2013) for estimating Rt over various time windows, using the incidence curve and assumptions on a Gamma-distributed serial interval distribution.
+* *SI From Sampling* : uses the same method as in Cori et al. (AJE, 2013) allowing to add some uncertainty around the serial interval distribution
 
 *Note*: this package does not allow, unlike EpiEstim, to differentiate between local and imported cases. We hope to add that feature in the near future
 

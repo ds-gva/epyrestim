@@ -5,9 +5,9 @@ import scipy.stats as stats
 from scipy.stats import gamma
 import warnings
 
-class estimators:
+class RtModel:
     # This is our estimated Rt object when using the parametric function
-    class Rt_parametric:
+    class ParametricOutput:
         def __init__(self, a_posterior, b_posterior, mean_posterior, std_posterior, t_start, t_end, real_dates):
             self.a_posterior = a_posterior
             self.b_posterior = b_posterior
@@ -17,35 +17,41 @@ class estimators:
             self.t_start = t_start
             self.t_end = t_end
             self.real_dates = real_dates[len(real_dates)-len(mean_posterior):]
-            self.dataframe = self.to_dataframe()
+            self.dataframe = self._to_dataframe()
 
-        def confidence_intervals(self):
+        def _to_dataframe(self):
+            """
+            Converts the parametric Rt estimates into a pandas dataframe that can be used for plotting or other.
+            The dataframe also includes key summary statistics such as mean, median, standard deviation and confidence intervals
+
+            Returns:
+            ----------
+            Pandas dataframe with all Rt statistics and dates
+            """
             low_ci_05 = stats.gamma.ppf(0.05, self.a_posterior, scale=self.b_posterior)
             high_ci_95 = stats.gamma.ppf(0.95, self.a_posterior,scale=self.b_posterior)
             low_ci_025 = stats.gamma.ppf(0.025, self.a_posterior, scale=self.b_posterior)
             high_ci_975 = stats.gamma.ppf(0.975, self.a_posterior, scale=self.b_posterior)
-            return low_ci_05, high_ci_95, low_ci_025, high_ci_975
 
-        def to_dataframe(self):
-            ci = self.confidence_intervals()
             rt_parametric_df = pd.DataFrame(data={'dates': self.real_dates,
                                     'Rt_mean': self.mean_posterior,
                                     'Rt_median': self.median_posterior,
-                                    'low_ci_05': ci[0],
-                                    'high_ci_95': ci[1],
-                                    'low_ci_025': ci[2],
-                                    'high_ci_975': ci[3]})
+                                                  'low_ci_05': low_ci_05,
+                                                  'high_ci_95': high_ci_95,
+                                                  'low_ci_025': low_ci_025,
+                                                  'high_ci_975': high_ci_975})
+            rt_parametric_df['dates'] = pd.to_datetime(rt_parametric_df['dates'])
             return rt_parametric_df
-    
+
     # This is the object for the Rt from SI sampling
-    class Rt_sampled:
+    class SamplingOutput:
         def __init__(self, all_sampled, t_start, t_end, real_dates):
             self.all_sampled = all_sampled
             self.t_start = t_start
             self.t_end = t_end
-            self.dataframe = self.to_dataframe(all_sampled, real_dates)
+            self.dataframe = self._to_dataframe(all_sampled, real_dates)
 
-        def to_dataframe(self, samples, real_dates):
+        def _to_dataframe(self, samples, real_dates):
             """
             Converts the generated Rt samples from our estimation into a pandas dataframe that can be used for plotting or other.
             The dataframe also includes key summary statistics such as mean, median, standard deviation and confidence intervals
@@ -89,9 +95,9 @@ class estimators:
     ### This function returns the starting and ending time periods according to the passed windows
     # also returns the total number of time periods
     # Important for those coming from R: Python starts indexing at 0, so window starts at 1, not 2
-    def calc_time_windows(self, incidence, win_start=1, win_end=7):
-        total_time = len(incidence)
+    def _calc_time_windows(self, incidence, win_start=1, win_end=7):
 
+        total_time = len(incidence)
         t_start = np.arange(win_start, total_time-(win_end-win_start))
         t_end = np.arange(win_end, total_time)
 
@@ -101,10 +107,10 @@ class estimators:
 
     ### Draw from discretized gamma distribution
     # This is the same implementaton as in Epiestim
-    #K is a positive integer or vector
+    # K is a positive integer or vector
     # mu is the mean
     # sigma is the deviation
-    def discr_si(self, k, mu, sigma):
+    def _discr_si(self, k, mu, sigma):
         assert sigma > 0, "Error: sigma must be >0"
         assert mu > 1, "Error: mu must be <=1"
         assert all(k) >= 0, "Error: values in k must all be >0"
@@ -115,6 +121,7 @@ class estimators:
 
         res = k * gamma.cdf(k, a, scale=b) + (k - 2) * gamma.cdf(k - 2,
                                                                  a, scale=b) - 2 * (k-1) * gamma.cdf(k-1, a, scale=b)
+
         res = res + a * b * (2 * gamma.cdf(k - 1, a + 1, scale=b) -
                              gamma.cdf(k - 2, a + 1, scale=b) - gamma.cdf(k, a + 1, scale=b))
 
@@ -124,11 +131,11 @@ class estimators:
         return np.array(res2)
 
     ## Creates the posteriors from the selected SI distribution
-    def posterior_from_si_distrib(self, incidence, si_distr, a_prior, b_prior, t_start, t_end):
+    def _posterior_from_si_distrib(self, incidence, si_distr, a_prior, b_prior, t_start, t_end):
 
         distrib_range = np.arange(0, len(si_distr))
         final_mean_si = np.sum(si_distr * distrib_range)
-        lam = self.overall_infectivity(incidence, si_distr)
+        lam = self._overall_infectivity(incidence, si_distr)
 
         posteriors = np.empty((len(t_start), 2))
 
@@ -144,19 +151,25 @@ class estimators:
 
     ## Description here: https://www.rdocumentation.org/packages/EpiEstim/versions/2.2-1/topics/overall_infectivity
     ## Defines overall infectivity by calculating lambda at time t
-    def overall_infectivity(self, incidence, si_distr):
-        T = len(incidence)
-        lam_t_vector = np.empty(len(incidence))
-        lam_t_vector[0] = np.nan
-
-        # For each day, we calculate LambdaT the infectivity. To do that we calculate all the infections to that day which we multiply be the probability of
+    def _overall_infectivity(self, incidence, si_distr):
+        incidence = incidence['Cases']
+        
+        
+        
+        # Calculate infectivity. To do that we calculate all the infections to that day which we multiply be the probability of
         # infection (the serial distribution flipped)
+        T = len(incidence)
+        lam_t_vector = np.empty(T)
+        lam_t_vector[0] = np.nan
+        lam_t_vector[1:] = [  np.sum(np.flip(incidence[0:i+1]) * si_distr[0:i+1]) for i in range(1, T) ]
+
+        # For each day, we calculate LambdaT the infectivity.
         # Note: can probably reduce this code and improve perf. 
-        for i in range(1, len(incidence)):
-            infections = incidence[0:i+1]
-            probabilities = np.flip(si_distr[0:i+1])
-            lam_t = np.sum(infections * probabilities)
-            lam_t_vector[i] = lam_t
+        # for i in range(1, len(incidence)):
+        #     infections = np.flip(incidence[0:i+1])
+        #     probabilities = si_distr[0:i+1]
+        #     lam_t = np.sum(infections * probabilities)
+        #     lam_t_vector[i] = lam_t
         return lam_t_vector
 
     ## This is the main function that does all the work
@@ -165,14 +178,14 @@ class estimators:
         # std_si: standard deviation of our serial interval distribution
         # win_start, win_end: starting and ending period for the rolling window (NOTE: in python index, unlike in R)
         # mean_prior, std_prior: the mean and std of our Rt prior
-    def Rt_parametric_si(self, incidence, mean_si, std_si, win_start=1, win_end=7, mean_prior=4, std_prior=4):
+    def calc_parametric_rt(self, incidence, mean_si, std_si, win_start=1, win_end=7, mean_prior=5, std_prior=5):
         # Find how many time periods we have
         T = len(incidence)
 
         real_dates = incidence.index
 
         # Create our discretized serial interval distribution
-        si_distribution = self.discr_si(np.arange(0, T), mean_si, std_si)
+        si_distribution = self._discr_si(np.arange(0, T), mean_si, std_si)
 
         # Fill our overflowing distribution with 0s (no prob)
         if len(si_distribution) < (T+1):
@@ -180,7 +193,7 @@ class estimators:
             si_distribution = np.pad(si_distribution, (0, over), 'constant')
 
         # Return out time windows and number of time periods based on the starting and ending time periods
-        t_start, t_end, nb_time_periods = self.calc_time_windows(
+        t_start, t_end, nb_time_periods = self._calc_time_windows(
             incidence, win_start=win_start, win_end=win_end)
 
         # Calculate the parameters of our gamma prior based on the provided mean and std of the serial interval
@@ -188,19 +201,19 @@ class estimators:
         b_prior = std_prior**2 / mean_prior
 
         # Calculate our posteriors from our serial interval distribution
-        post = self.posterior_from_si_distrib(
+        post = self._posterior_from_si_distrib(
             incidence, si_distribution, a_prior, b_prior, t_start, t_end)
         a_posterior, b_posterior = post[:, 0], post[:, 1]
 
         mean_posterior = a_posterior * b_posterior
         std_posterior = np.sqrt(a_posterior) * b_posterior
 
-        result = self.Rt_parametric(a_posterior, b_posterior, mean_posterior,
+        result = self.ParametricOutput(a_posterior, b_posterior, mean_posterior,
                                std_posterior, t_start, t_end, real_dates)
         return result
 
     # Estimate Rt while adding uncertainty around the SI
-    def Rt_from_si_sampling(self, incidence, sample_mean_truncnorm, sample_std_truncnorm, n_si_sims=1, n_posterior_samples=1, win_start=2, win_end=8, mean_prior=4, std_prior=4):
+    def calc_sampling_rt(self, incidence, sample_mean_truncnorm, sample_std_truncnorm, n_si_sims=1, n_posterior_samples=1, win_start=1, win_end=7, mean_prior=4, std_prior=4):
 
         ## First part is same as for standard Rt estimation (need to create a separate function to encapsulate that)
 
@@ -210,17 +223,16 @@ class estimators:
         real_dates = incidence.index
 
         # Generate our pairs of mean and std for the SI by sampling n_si_sims pairs
-        si_pairs = self.sample_si_distributions(
+        si_pairs = self._sample_si_distributions(
             sample_mean_truncnorm, sample_std_truncnorm, n_si_sims)
 
         results = []
         # Loop through all the pairs
         for pair in si_pairs:
 
-            ## !!! ALL THIS CODE NEEDS TO MOVE TO A FUNCTION
             # Generate the serial interval distribution for the pair
             mean_si, std_si = pair
-            si_distribution = self.discr_si(np.arange(0, T), mean_si, std_si)
+            si_distribution = self._discr_si(np.arange(0, T), mean_si, std_si)
 
             # Fill our overflowing distribution with 0s (no prob)
             if len(si_distribution) < (T+1):
@@ -229,7 +241,7 @@ class estimators:
                     si_distribution, (0, over), 'constant')
 
             # Return cumulative incidence per time window, starting window and ending window
-            t_start, t_end, nb_time_periods = self.calc_time_windows(
+            t_start, t_end, nb_time_periods = self._calc_time_windows(
                 incidence, win_start=win_start, win_end=win_end)
 
             # Calculate the parameters of our gamma prior based on the provided mean and std of the serial interval
@@ -237,7 +249,7 @@ class estimators:
             b_prior = std_prior**2 / mean_prior
 
             # Calculate our posteriors from our serial interval distribution
-            post = self.posterior_from_si_distrib(
+            post = self._posterior_from_si_distrib(
                 incidence, si_distribution, a_prior, b_prior, t_start, t_end)
             a_posterior, b_posterior = post[:, 0], post[:, 1]
 
@@ -255,22 +267,12 @@ class estimators:
         # Bring all our samples together
         all_samples = np.concatenate(results, axis=1)
         # Move to a dataframe for easier manipulation
-        result = self.Rt_sampled(all_samples, t_start, t_end, real_dates)
+        result = self.SamplingOutput(all_samples, t_start, t_end, real_dates)
 
         # Return the dataframe
         return result
 
-    ## Here the mean and standard deviation of the serial interval distribution varies according to a truncated normal distribution
-
-    ## Mean of our Serial Interval, sampled from Truncated Normal Distribution
-    # sample_mean_truncnorm: (mean, std, min, max) of the trunacted normal distribution from which we sample the serial interval mean
-    # Equivalent to mean_si (mean) std_mean_si (std), min_mean_si, max_mean_si in epiestim
-
-    ## Standard deviation of our Serial Interval, samples from Truncated Normal Distribution
-    # sample_std_truncnorm: (mean, std, min, max) of the of the trunacted normal distribution from which we sample the serial interval standard deviation
-    # Equivalent to std_si (mean) std_std_si (std), min_std_si, max_std_si in epiestim
-
-    def sample_si_distributions(self, sample_mean_truncnorm, sample_std_truncnorm, n_samples=100):
+    def _sample_si_distributions(self, sample_mean_truncnorm, sample_std_truncnorm, n_samples=100):
         """
         Run estimation of Rt using sampled serial interval distributions
         We sample n_samples pairs of means and standard deviations of serial interval distributions from two truncated normal distributions.
@@ -341,3 +343,5 @@ class estimators:
         
         # Return our array of sampled pairs
         return sampled_si_distributions
+
+
