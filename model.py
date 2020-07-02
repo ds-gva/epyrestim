@@ -152,24 +152,13 @@ class RtModel:
     ## Description here: https://www.rdocumentation.org/packages/EpiEstim/versions/2.2-1/topics/overall_infectivity
     ## Defines overall infectivity by calculating lambda at time t
     def _overall_infectivity(self, incidence, si_distr):
-        incidence = incidence['Cases']
-        
-        
-        
+        incidence = incidence['Cases']      
         # Calculate infectivity. To do that we calculate all the infections to that day which we multiply be the probability of
         # infection (the serial distribution flipped)
         T = len(incidence)
         lam_t_vector = np.empty(T)
         lam_t_vector[0] = np.nan
         lam_t_vector[1:] = [  np.sum(np.flip(incidence[0:i+1]) * si_distr[0:i+1]) for i in range(1, T) ]
-
-        # For each day, we calculate LambdaT the infectivity.
-        # Note: can probably reduce this code and improve perf. 
-        # for i in range(1, len(incidence)):
-        #     infections = np.flip(incidence[0:i+1])
-        #     probabilities = si_distr[0:i+1]
-        #     lam_t = np.sum(infections * probabilities)
-        #     lam_t_vector[i] = lam_t
         return lam_t_vector
 
     ## This is the main function that does all the work
