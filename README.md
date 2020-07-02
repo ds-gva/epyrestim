@@ -18,22 +18,43 @@ There is currently no installation, you can just clone the whole package and sta
 Load the modelling module
 ```p
 import epyrestim.model as epy
+import pandas as pd
 ```
 
 Load incidence data (numpy array or pandas series) - here dummy
 ```p
-incidence = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+incidence = pd.read_csv('incidence.csv')
 ```
-*estimators* class
+*RtModel* class
 ```p
-estimator = epy.estimators()
+model = epy.RtModel()
 ```
 Run a parametric estimation over our incidence data using a serial interval that is gamma distributed with mean of 4.7 and standard deviation of 2.3. We run this over a window of 6 days.
 
 ```p
-estimated = estimator.Rt_parametric_si(incidence,
+estimated_rt_parametric = model.calc_parametric_rt(incidence,
                                         mean_si=4.7,
                                         std_si=2.3,
-                                        win_start=2,
-                                        win_end=8)
+                                        win_start=1,
+                                        win_end=7, mean_prior=2.3, std_prior=2)
+```
+
+Run a sampling estimation by providing a truncated normal distribution for mean & std of the serial intervals to explore. Also provide number of simulations and number of draws from the posterior samples
+
+```p
+estimated_rt_sampled = model.calc_sampling_rt(incidence,
+                                        sample_mean_truncnorm=(5, 2, 3, 7),
+                                        sample_std_truncnorm=(2,1,1,3),
+                                        n_si_sims=100,
+                                        n_posterior_samples=100,
+                                        win_start=1,
+                                        win_end=7,
+                                        mean_prior=2.3,
+                                        std_prior=2)
+```
+
+Each of these returns an object (*ParametricOutput* and *SamplingOutput*) with the estimated data. Each object contains a dataframe with all the outputs.
+
+```p
+estimated_rt_sampled.dataframe.head(10)
 ```
